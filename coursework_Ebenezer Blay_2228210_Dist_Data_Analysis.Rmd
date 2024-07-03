@@ -1,0 +1,424 @@
+---
+title: "Distributed Data Analysis Coursework (CS5811)"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+date: "2024-03-07"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+```{r}
+
+#Libraries
+
+library(ggplot2)
+library(dplyr)
+library(factoextra) 
+library(cluster) 
+library(randomForest)
+library(rpart)
+library(caret)
+library(rpart.plot)
+library(tidyr)
+library(Metrics)
+library(xgboost)
+library(tidyverse)
+library(sparklyr)
+library(corrplot)
+
+
+```
+
+```{r}
+housedata <- read.csv("HOUSE PRICING PREDICTION DATASET GROUP 27.csv")
+str(housedata)
+summary(housedata)
+```
+
+```{r}
+table(housedata$bathrooms)
+table(housedata$Number.of.bedrooms)
+table(housedata$waterfront)
+table(housedata$city)
+table(housedata$house.view)
+table(housedata$floor.size)
+
+```
+
+```{r}
+housedata$Number.of.bedrooms <- as.factor(housedata$Number.of.bedrooms)
+housedata$bathrooms <- as.factor(housedata$bathrooms)
+housedata$floor.size <- as.factor(housedata$floor.size)
+housedata$waterfront <- as.factor(housedata$waterfront)
+housedata$house.view <- as.factor(housedata$house.view)
+housedata$condition <- as.factor(housedata$condition)
+housedata$city <- as.factor(housedata$city)
+
+
+```
+
+```{r}
+str(housedata)
+summary(housedata)
+```
+
+```{r}
+housedata <- housedata[housedata$Number.of.bedrooms != 0, ] # Removing the rows where bedrooms is equal to 0
+```
+
+```{r}
+housedata <- housedata[housedata$price != 0, ] # Removing the rows where price is equal to 0
+summary(housedata)
+```
+
+
+```{r}
+# Boxplot visualization 
+boxplot(housedata$price)
+
+# Using IQR (Interquartile Range):
+iqr <- IQR(housedata$price)
+upper_limit <- quantile(housedata$price, 0.75) + 1.5 * iqr
+lower_limit <- quantile(housedata$price, 0.25) - 1.5 * iqr
+
+# Identify rows with outlier price values
+outliers <- which(housedata$price < lower_limit | housedata$price > upper_limit)
+```
+
+```{r}
+# Remove rows with outlier prices 
+housedata <- housedata[-outliers, ]  # Subset excluding outliers
+summary(housedata)
+```
+
+```{r}
+boxplot(housedata$price)
+```
+
+
+```{r}
+# Convert factor to numeric before rounding
+# First, convert the factor to character to avoid issues with factor levels, then to numeric
+housedata$bathrooms <- as.numeric(as.character(housedata$bathrooms))
+
+# Now you can safely use round
+housedata$bathrooms <- round(housedata$bathrooms)
+
+# Create the table
+table(housedata$bathrooms)
+
+```
+```{r}
+# Confirm the data type
+housedata$price <- as.numeric(housedata$price)
+
+# Filter and confirm the filter
+housedata <- housedata %>% 
+  filter(price >= 0)
+
+# Confirm that the filter worked
+summary(housedata$price) # The minimum should be 0 or greater
+
+# Specify the path to save the file
+file_path <- "pca_house_pricing.csv"
+
+# Create the directory if it doesn't exist
+dir.create(dirname(file_path), recursive = TRUE, showWarnings = FALSE)
+
+# Try to write the file, catching any errors
+tryCatch({
+    write.csv(housedata, file_path, row.names = FALSE)
+    cat("File saved successfully at:", file_path, "\n")
+}, error = function(e) {
+    cat("Failed to write file. Error message: ", e$message, "\n")
+})
+
+
+#creating PCA, unbalanced, balanaced dataset
+write.csv(housedata, "unbalanced_house_pricing.csv", row.names = FALSE)
+write.csv(housedata, "balanced_house_pricing.csv", row.names = FALSE)
+write.csv(housedata, "pca_house_pricing.csv", row.names = FALSE)
+```
+
+##EDA:Uni-Variate Visualization
+```{r}
+# Ensure the 'price' column is numeric and filter out negative values
+housedata <- housedata %>%
+  mutate(price = as.numeric(price)) %>%
+  filter(price >= 0)
+
+# Plot the histogram with the filtered data
+ggplot(data = housedata, aes(x=price)) + 
+  geom_histogram(bins = 30, fill="skyblue", color="black") + # Adjusted bins for better visualization
+  theme_classic() +
+  ggtitle("Price of House Distribution. Green Line=Mean, Red Line=Median") +
+  geom_vline(aes(xintercept=median(price, na.rm = TRUE)),
+             color='red', linetype="dashed", size=1) +
+  geom_vline(aes(xintercept=mean(price, na.rm = TRUE)),
+             color='darkgreen', linetype="dashed", size=1) +
+  xlab("Price of House") + 
+  ylab("Count") +
+  xlim(0, max(housedata$price, na.rm = TRUE)) # Set explicit x-axis limits
+
+# Ensure the 'Number.of.bedrooms' column is numeric. 
+# Replace 'Number.of.bedrooms' with the actual column name in your dataframe.
+housedata <- housedata %>%
+  mutate(Number.of.bedrooms = as.numeric(Number.of.bedrooms))
+
+# Calculate median and mean outside the ggplot call to handle NAs properly
+median_bedrooms <- median(housedata$Number.of.bedrooms, na.rm = TRUE)
+mean_bedrooms <- mean(housedata$Number.of.bedrooms, na.rm = TRUE)
+
+# Now plot the histogram with the computed values for median and mean
+ggplot(data = housedata, aes(x=Number.of.bedrooms)) + 
+  geom_histogram(bins = 10, fill="skyblue", color="black") +
+  theme_classic() +
+  ggtitle("Number of Bedrooms Distribution. Green Line=Mean, Red Line=Median") +
+  geom_vline(xintercept=median_bedrooms, color='red', linetype="dashed", size=1) +
+  geom_vline(xintercept=mean_bedrooms, color='darkgreen', linetype="dashed", size=1) +
+  xlab("Number of Bedrooms") + 
+  ylab("Count")
+
+
+ggplot(data = housedata, aes(x=sqft_living)) + geom_histogram(bins = 10,fill="skyblue",color="black") + theme_classic()+ ggtitle("Living area of House Distribution. Green Line=Mean, Red Line=Median") + geom_vline(aes(xintercept=median(sqft_living)),
+            color='red', linetype="dashed", size=1)+geom_vline(aes(xintercept=mean(sqft_living)),
+            color='darkgreen', linetype="dashed", size=1) + xlab("Size of House") + ylab("Count")
+
+ggplot(data = housedata, aes(x=year.built)) + geom_histogram(bins = 10,fill="skyblue",color="black") + theme_classic()+ ggtitle("Year of built of House Distribution. Green Line=Mean, Red Line=Median") + geom_vline(aes(xintercept=median(year.built)),
+            color='red', linetype="dashed", size=1)+geom_vline(aes(xintercept=mean(year.built)),
+            color='darkgreen', linetype="dashed", size=1) + xlab("Year of Built of House") + ylab("Count")
+ 
+###
+# Replace 'year..renovated' with the exact name of the column from your dataframe
+housedata <- housedata %>%
+  mutate(year_renovated = as.numeric(`year..renovated`)) %>%
+  filter(year_renovated > 0)
+
+# Plot the histogram with the filtered data
+ggplot(data = housedata, aes(x=year_renovated)) + 
+  geom_histogram(bins = 30, fill="skyblue", color="black") + # Adjusted bins for better visualization
+  theme_classic() +
+  ggtitle("Year of Renovation of House Distribution. Green Line=Mean, Red Line=Median") +
+  geom_vline(aes(xintercept=median(year_renovated, na.rm = TRUE)),
+             color='red', linetype="dashed", size=1) +
+  geom_vline(aes(xintercept=mean(year_renovated, na.rm = TRUE)),
+             color='darkgreen', linetype="dashed", size=1) +
+  xlab("Year of Renovation of House") + 
+  ylab("Count") +
+  xlim(min(housedata$year_renovated, na.rm = TRUE), max(housedata$year_renovated, na.rm = TRUE)) # Set x-axis limits
+
+
+#City Distribution
+ggplot(data = housedata, aes(x=city)) + geom_bar(fill="darkolivegreen") + theme(axis.text.x=element_text(angle=90))+ ggtitle("City Distribution") + xlab("Cities") + ylab("Count")
+
+#Bedroom Distribution
+############################
+ggplot(data = housedata, aes(x=Number.of.bedrooms)) + geom_bar(fill="darkolivegreen") + theme(axis.text.x=element_text(angle=90))+ ggtitle("Bedroom Distribution") + xlab("Bedroom") + ylab("Count")
+
+#Bathroom Distribution
+ggplot(data = housedata, aes(x=bathrooms)) + geom_bar(fill="darkolivegreen") + theme(axis.text.x=element_text(angle=90))+ ggtitle("Bathrooms of House Distribution") + xlab("Bathrooms") + ylab("Count")
+
+#Floor Size Distribution
+ggplot(data = housedata, aes(x=floor.size)) + geom_bar(fill="darkolivegreen") + theme(axis.text.x=element_text(angle=90))+ ggtitle("Floor Size of House Distribution") + xlab("Floor Size") + ylab("Count")
+
+#Condition Distribution
+ggplot(data = housedata, aes(x=condition)) + geom_bar(fill="darkolivegreen") + theme(axis.text.x=element_text(angle=90))+ ggtitle("Condition of House Distribution") + xlab("Condition") + ylab("Count")
+
+#House View Distribution
+ggplot(data = housedata, aes(x=house.view)) + geom_bar(fill="darkolivegreen") + theme(axis.text.x=element_text(angle=90))+ ggtitle("House View Distribution") + xlab("House View") + ylab("Count")
+
+# Water Front Status
+ggplot(data = housedata, aes(x=waterfront)) + geom_bar(fill="steelblue") + ggtitle("Water Front Status ") + xlab("Water Front") + ylab("Count")
+```
+##Multi-Variate Visualization:
+```{r}
+ggplot(housedata, aes(x=price, y=sqft_living)) + geom_point() + ggtitle("Price vs Living Area status") + theme_classic() + xlab("House Price") + ylab("Living area of the House in sqft") +geom_point(size= 1, shape = 1) + geom_smooth(method = "loess")
+
+ggplot(housedata, aes(x=price, y=sqft_lot)) + geom_point() + ggtitle("Price vs Lot Area status") + theme_classic() + xlab("House Price") + ylab("Lot area of the House in sqft") +geom_point(size= 1, shape = 1) + geom_smooth(method = "loess")
+
+ggplot(housedata, aes(x=price, y=sqft_above)) + geom_point() + ggtitle("Price vs Above Area status") + theme_classic() + xlab("House Price") + ylab("Above area of the House in sqft") +geom_point(size= 1, shape = 1) + geom_smooth(method = "loess")
+
+ggplot(housedata, aes(x=price, y=sqft_basement)) + geom_point() + ggtitle("Price vs Basement Area status") + theme_classic() + xlab("House Price") + ylab("Basement area of the House in sqft") +geom_point(size= 1, shape = 1) + geom_smooth(method = "loess")
+
+ggplot(housedata, aes(x=price, y=year.built)) + geom_point() + ggtitle("Price vs Year of built status") + theme_classic() + xlab("House Price") + ylab("Year of Built of the House") +geom_point(size= 1, shape = 1) + geom_smooth(method = "loess")
+
+ggplot(housedata, aes(x=price, y=Number.of.bedrooms)) + geom_point() + ggtitle("Price vs Bedrooms status") + theme_classic() + xlab("House Price") + ylab("Number of bedroom of the House") +geom_point(size= 1, shape = 1) + geom_smooth(method = "loess")
+
+ggplot(housedata, aes(x=price, y=bathrooms)) + geom_point() + ggtitle("Price vs Bathroom status") + theme_classic() + xlab("House Price") + ylab("Bathroom of the House") +geom_point(size= 1, shape = 1) + geom_smooth(method = "loess")
+
+ggplot(housedata, aes(x=price, y=condition)) + geom_point() + ggtitle("Price vs Condition status") + theme_classic() + xlab("House Price") + ylab("Condtion of the House") +geom_point(size= 1, shape = 1) + geom_smooth(method = "loess")
+
+ggplot(housedata, aes(x=city, fill=price)) + geom_bar() + ggtitle("Price vs City status") + theme_classic() + xlab("City") + ylab("Price of the House") + labs(fill='Price of House') + coord_flip()
+
+ggplot(housedata, aes(x=condition, fill=price)) + geom_bar() + ggtitle("Price vs Condition status") + theme_classic() + xlab("Condition") + ylab("Price of the House") + labs(fill='Price of House')
+
+```
+## Correlation Plot
+```{r}
+
+if (!is.data.frame(housedata)) {
+  stop
+}
+
+# Display column names
+print(names(housedata))
+
+# Correcting potential issues in column names
+names(housedata) <- gsub(" ", ".", names(housedata), fixed = TRUE) 
+names(housedata) <- gsub("-", ".", names(housedata), fixed = TRUE) 
+
+print(names(housedata))
+
+# Convert columns 
+numeric_cols <- c('price', 'Number.of.bedrooms', 'bathrooms', 'sqft_living', 'sqft_lot', 
+                  'floor.size', 'waterfront', 'house.view', 'condition', 'sqft_above', 
+                  'sqft_basement', 'year.built', 'year..renovated')
+
+# Adjust the column names
+housedata[numeric_cols] <- sapply(housedata[numeric_cols], function(x) as.numeric(as.character(x)))
+
+# Check for any conversion failures
+if (sum(sapply(housedata[numeric_cols], function(x) any(is.na(x)))) > 0) {
+  warning("Some data could not be converted to numeric and are set as NA")
+}
+
+# Calculate the correlation matrix
+cor_matrix <- cor(housedata[numeric_cols], use = "pairwise.complete.obs")  
+
+# Plot the correlation matrix using corrplot
+corrplot(cor_matrix, method = "color", type = "upper", order = "hclust",
+         tl.col = "red", tl.srt = 45,  # text label color and rotation
+         addCoef.col = "red")  # add correlation coefficients to the plot
+
+
+
+```
+## PCA
+```{r}
+# Exclude the target variable 'price' for PCA
+numeric_features <- housedata %>% select(-price) %>% select_if(is.numeric)
+
+# Scale the numeric features
+housedata_scaled <- scale(numeric_features)
+
+# Apply PCA using prcomp
+pca_result <- prcomp(housedata_scaled, center = TRUE, scale. = TRUE)
+
+# Examine the summary of PCA results
+print(summary(pca_result))
+
+# Look at the rotation
+print(pca_result$rotation)
+
+# Plot to visualize variance explained (Scree Plot)
+plot(pca_result, type = "lines")
+
+# Extract the PCA scores (the coordinates of the data points in the PCA space)
+pca_scores <- as.data.frame(pca_result$x)
+
+# Combine PCA scores with the target variable 'price'
+pca_dataset <- cbind(pca_scores, price = housedata$price)
+
+# Print out the first few rows of the new PCA dataset
+print(head(pca_dataset))
+
+# Optionally, save the PCA dataset to a CSV file
+write.csv(pca_dataset, "pca_house_pricing.csv", row.names = FALSE)
+
+```
+## PCA on Test and Train
+```{r}
+
+# Scale numeric features excluding the 'price' column
+numeric_features <- select(housedata, -price) %>% select_if(is.numeric)
+housedata_scaled <- scale(numeric_features)
+
+# Ensure the number of rows in the scaled data matches the number of prices
+if (nrow(housedata_scaled) != length(housedata$price)) {
+  stop("Row count mismatch between scaled data and price data.")
+}
+
+# Apply PCA
+pca_result <- prcomp(housedata_scaled, center = TRUE, scale. = TRUE)
+
+# Extract PCA scores
+pca_scores <- as.data.frame(pca_result$x)
+
+# Combine PCA scores with the 'price' column
+pca_dataset <- cbind(pca_scores, price = housedata$price)
+
+# Splitting the PCA dataset into training and testing sets (70:30)
+set.seed(123) # For reproducibility
+trainIndex <- createDataPartition(pca_dataset$price, p = .7, list = FALSE)
+
+train_set <- pca_dataset[trainIndex, ]
+test_set <- pca_dataset[-trainIndex, ]
+
+train_set_pca <- train_set
+test_set_pca <- test_set
+
+```
+
+## Decision Tree using Test and Trained PCA
+```{r}
+# Train the Decision Tree Model
+decision_tree_model <- rpart(price ~ ., data = train_set, method = "anova")
+
+
+# Make Predictions on the Test Set
+predictions <- predict(decision_tree_model, newdata = test_set[, -ncol(test_set)])
+
+# Actual prices from the test set for evaluation
+actual_prices <- test_set$price
+
+# Calculate Root Mean Squared Error (RMSE) for evaluation
+rmse <- sqrt(mean((predictions - actual_prices)^2))
+cat("RMSE on test set:", rmse, "\n")
+
+# Visualize the Decision Tree
+rpart.plot(decision_tree_model, type = 4, extra = 101)
+
+```
+## Performance Evaluation on PCA
+```{r}
+
+# Calculate Root Mean Squared Error (RMSE)
+rmse <- sqrt(mean((predictions - actual_prices) ^ 2))
+
+# Calculate Mean Absolute Error (MAE)
+mae <- mean(abs(predictions - actual_prices))
+
+# Calculate Mean Absolute Percentage Error (MAPE)
+mape <- mean(abs((predictions - actual_prices) / actual_prices)) * 100
+
+# Calculate R-squared (Coefficient of Determination)
+rsq <- summary(lm(predictions ~ actual_prices))$r.squared
+
+# Optionally, calculate Adjusted R-squared
+# Adjusted R-squared might not be directly applicable here since we're comparing predictions to actuals, 
+# but if you're interested in the model's explanatory power based on the input features:
+adj_rsq <- summary(lm(actual_prices ~ predictions))$adj.r.squared
+
+# Print the performance metrics
+cat("Performance Metrics for Decision Tree Model:\n")
+cat("Root Mean Squared Error (RMSE):", rmse, "\n")
+cat("Mean Absolute Error (MAE):", mae, "\n")
+cat("Mean Absolute Percentage Error (MAPE):", mape, "%\n")
+cat("R-squared:", rsq, "\n")
+cat("Adjusted R-squared:", adj_rsq, "\n")
+
+
+```
+
